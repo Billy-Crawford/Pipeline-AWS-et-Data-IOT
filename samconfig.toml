@@ -1,0 +1,13 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "pipeline-iot-stack-ongatobaye"
+resolve_s3 = true
+s3_prefix = "pipeline-iot-stack-ongatobaye"
+capabilities = "CAPABILITY_IAM"
+parameter_overrides = "StudentRoleARN=\"arn:aws:iam::629193321657:role/ongartobaye-lambda-s3-trigger-s-LambdaExecutionRole-QYXr9hheqURI\""
+image_repositories = []
+disable_rollback = false
+
+[default.global.parameters]
+region = "eu-west-3"

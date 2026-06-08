@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: Pipeline d'Ingestion IoT Temps Réel et Espace Documentaire Sécurisé
+
+Parameters:
+  StudentRoleARN:
+    Type: String
+    Description: ARN du role IAM existant pour le compte etudiant AWS.
+    Default: arn:aws:iam::629193321657:role/ongartobaye-lambda-s3-trigger-s-LambdaExecutionRole-QYXr9hheqURI
+
+Resources:
+  # =========================================================================
+  # SOUS-SYSTÈME A : PIPELINE IOT (SERVERLESS)
+  # =========================================================================
+
+  # 1. Bucket S3 pour le Data Lake Brut
+  IoTRawDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub io-raw-data-lake-${AWS::AccountId}-${AWS::Region}-v2
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  # Politique de Bucket pour accorder le droit d'écriture S3 au rôle étudiant
+  IoTRawDataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref IoTRawDataBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowLambdaWriteS3
+            Effect: Allow
+            Principal:
+              AWS: !Ref StudentRoleARN
+            Action:
+              - s3:PutObject
+              - s3:PutObjectAcl
+            Resource: !Sub "arn:aws:s3:::${IoTRawDataBucket}/*"
+
+  # 2. Table DynamoDB pour le Feature Store Analytique
+  IoTFeatureStoreTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ongartobaye-feature-store-${AWS::StackName}
+      AttributeDefinitions:
+        - AttributeName: requestId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: requestId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  # CORRECTION CRITIQUE : Injection des droits DynamoDB sur le rôle existant
+  LambdaDynamoDBAccessPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub LambdaDynamoDBAccess-${AWS::StackName}
+      Roles:
+        # Nettoyage chirurgical de l'ARN pour n'avoir que le nom du rôle
+        - !Select [
+            1,
+            !Split ["/", !Select [5, !Split [":", !Ref StudentRoleARN]]],
+          ]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowDynamoDBWrite
+            Effect: Allow
+            Action:
+              - dynamodb:PutItem
+              - dynamodb:UpdateItem
+              - dynamodb:GetItem
+              - dynamodb:Scan
+            Resource: !GetAtt IoTFeatureStoreTable.Arn
+
+  # 3. Fonction Lambda pour le traitement des donnees
+  IoTProcessingFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: src/
+      Handler: index.handler
+      Runtime: python3.11
+      Timeout: 30
+      Role: !Ref StudentRoleARN
+      Environment:
+        Variables:
+          S3_BUCKET: !Ref IoTRawDataBucket
+          DYNAMODB_TABLE: !Ref IoTFeatureStoreTable
+      Events:
+        IoTInboundAPI:
+          Type: Api
+          Properties:
+            Path: /ingest
+            Method: ANY # <-- Remplacer 'post' par 'ANY' ou ajouter un bloc pour 'get'
+
+  # =========================================================================
+  # SOUS-SYSTÈME B : DOCUMENTATION TECHNIQUE SÉCURISÉE (ISOLEMENT S3 PRIVÉ)
+  # =========================================================================
+
+  # 1. Bucket S3 Strictement Privé
+  TechDocBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub tech-doc-${AWS::AccountId}-${AWS::Region}-v2
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+Outputs:
+  ApiGatewayIngestionURL:
+    Description: URL directe API Gateway pour l'envoi des donnees IoT (POST)
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod/ingest"
+  TechDocBucketName:
+    Description: Nom du bucket S3 de la documentation technique pour l'upload
+    Value: !Ref TechDocBucket
