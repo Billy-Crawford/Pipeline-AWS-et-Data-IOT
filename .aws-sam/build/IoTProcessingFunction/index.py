@@ -139,3 +139,4 @@ def handler(event, context):
             'body': json.dumps({'error': 'Erreur interne de stockage.', 'details': str(critical_aws_error)})
         }
     
+    
